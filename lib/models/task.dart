@@ -58,9 +58,11 @@ class Task {
           (p) => p.name == (map['priority'] as String? ?? 'medium'),
           orElse: () => Priority.medium,
         ),
-        createdAt: DateTime.tryParse(map['createdAt'] as String? ?? '') ?? DateTime.now(),
+        createdAt:
+            DateTime.tryParse(map['createdAt'] as String? ?? '') ?? DateTime.now(),
       );
 
   String toJson() => jsonEncode(toMap());
-  factory Task.fromJson(String source) => Task.fromMap(jsonDecode(source) as Map<String, dynamic>);
+  factory Task.fromJson(String source) =>
+      Task.fromMap(jsonDecode(source) as Map<String, dynamic>);
 }

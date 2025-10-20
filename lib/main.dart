@@ -1,122 +1,271 @@
 import 'package:flutter/material.dart';
+import 'models/task.dart';
+import 'data/task_store.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
   runApp(const MyApp());
 }
 
-class MyApp extends StatelessWidget {
+class MyApp extends StatefulWidget {
   const MyApp({super.key});
-
-  // This widget is the root of your application.
   @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Flutter Demo',
-      theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
-      ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
-    );
+  State<MyApp> createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> {
+  final store = TaskStore();
+  ThemeMode _themeMode = ThemeMode.system;
+
+  @override
+  void initState() {
+    super.initState();
+    store.loadThemeMode().then((mode) {
+      setState(() {
+        _themeMode = switch (mode) {
+          'light' => ThemeMode.light,
+          'dark' => ThemeMode.dark,
+          _ => ThemeMode.system,
+        };
+      });
+    });
   }
-}
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
-
-  @override
-  State<MyHomePage> createState() => _MyHomePageState();
-}
-
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
-
-  void _incrementCounter() {
-    setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
+  void _toggleTheme() async {
+    final next = switch (_themeMode) {
+      ThemeMode.system => ThemeMode.light,
+      ThemeMode.light => ThemeMode.dark,
+      ThemeMode.dark => ThemeMode.system,
+    };
+    setState(() => _themeMode = next);
+    await store.saveThemeMode(switch (next) {
+      ThemeMode.light => 'light',
+      ThemeMode.dark => 'dark',
+      _ => 'system',
     });
   }
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
+    return MaterialApp(
+      title: 'Priority To-Do',
+      themeMode: _themeMode,
+      theme: ThemeData(useMaterial3: true, colorSchemeSeed: Colors.blue),
+      darkTheme: ThemeData(
+        useMaterial3: true,
+        colorSchemeSeed: Colors.blue,
+        brightness: Brightness.dark,
+      ),
+      home: TaskPage(onToggleTheme: _toggleTheme),
+    );
+  }
+}
+
+class TaskPage extends StatefulWidget {
+  const TaskPage({super.key, required this.onToggleTheme});
+  final VoidCallback onToggleTheme;
+  @override
+  State<TaskPage> createState() => _TaskPageState();
+}
+
+class _TaskPageState extends State<TaskPage> {
+  final store = TaskStore();
+  final titleCtrl = TextEditingController();
+  Priority _newPriority = Priority.medium;
+  List<Task> _tasks = [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final tasks = await store.loadTasks();
+    setState(() {
+      _tasks = tasks;
+      _loading = false;
+    });
+  }
+
+  Future<void> _persist() async => store.saveTasks(_tasks);
+
+  void _addTask() {
+    final title = titleCtrl.text.trim();
+    if (title.isEmpty) return;
+    final id = DateTime.now().microsecondsSinceEpoch.toString();
+    setState(() {
+      _tasks.add(Task(id: id, title: title, priority: _newPriority));
+      _tasks.sort(TaskStore.taskComparator);
+      titleCtrl.clear();
+      _newPriority = Priority.medium;
+    });
+    _persist();
+  }
+
+  void _deleteTask(Task t) {
+    setState(() => _tasks.removeWhere((e) => e.id == t.id));
+    _persist();
+  }
+
+  void _toggleComplete(Task t, bool? value) {
+    final idx = _tasks.indexWhere((e) => e.id == t.id);
+    if (idx == -1) return;
+    setState(() => _tasks[idx].completed = value ?? false);
+    _persist();
+  }
+
+  Future<void> _editPriority(Task t) async {
+    Priority selected = t.priority;
+    final result = await showDialog<Priority>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Change Priority'),
+        content: DropdownButton<Priority>(
+          isExpanded: true,
+          value: selected,
+          items: Priority.values
+              .map((p) => DropdownMenuItem(value: p, child: Text(p.label)))
+              .toList(),
+          onChanged: (p) => setState(() => selected = p ?? selected),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, selected), child: const Text('Save')),
+        ],
+      ),
+    );
+    if (result != null) {
+      final idx = _tasks.indexWhere((e) => e.id == t.id);
+      if (idx != -1) {
+        setState(() {
+          _tasks[idx].priority = result;
+          _tasks.sort(TaskStore.taskComparator);
+        });
+        _persist();
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
+        title: const Text('Priority To-Do'),
+        actions: [
+          IconButton(
+            tooltip: 'Toggle Light/Dark/System',
+            onPressed: widget.onToggleTheme,
+            icon: const Icon(Icons.brightness_6_outlined),
+          ),
+        ],
       ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Text('You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(12.0),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        flex: 3,
+                        child: TextField(
+                          controller: titleCtrl,
+                          decoration: const InputDecoration(
+                            labelText: 'Add a task',
+                            border: OutlineInputBorder(),
+                          ),
+                          onSubmitted: (_) => _addTask(),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        flex: 2,
+                        child: DropdownButtonFormField<Priority>(
+                          value: _newPriority,
+                          decoration: const InputDecoration(
+                            labelText: 'Priority',
+                            border: OutlineInputBorder(),
+                          ),
+                          items: Priority.values
+                              .map((p) =>
+                                  DropdownMenuItem(value: p, child: Text(p.label)))
+                              .toList(),
+                          onChanged: (p) =>
+                              setState(() => _newPriority = p ?? Priority.medium),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      FilledButton(onPressed: _addTask, child: const Icon(Icons.add)),
+                    ],
+                  ),
+                ),
+                const Divider(height: 0),
+                Expanded(
+                  child: _tasks.isEmpty
+                      ? const Center(child: Text('No tasks yet. Add one above.'))
+                      : ListView.builder(
+                          itemCount: _tasks.length,
+                          itemBuilder: (context, index) {
+                            final t = _tasks[index];
+                            return Dismissible(
+                              key: ValueKey(t.id),
+                              background: Container(color: Colors.redAccent),
+                              onDismissed: (_) => _deleteTask(t),
+                              child: ListTile(
+                                leading: Checkbox(
+                                    value: t.completed,
+                                    onChanged: (v) => _toggleComplete(t, v)),
+                                title: Text(
+                                  t.title,
+                                  style: TextStyle(
+                                      decoration: t.completed
+                                          ? TextDecoration.lineThrough
+                                          : null),
+                                ),
+                                subtitle: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    _PriorityChip(priority: t.priority),
+                                    const SizedBox(width: 8),
+                                    Text('Created ${t.createdAt.toLocal()}'
+                                        .split('.')
+                                        .first),
+                                  ],
+                                ),
+                                trailing: IconButton(
+                                  tooltip: 'Change priority',
+                                  icon: const Icon(Icons.flag_outlined),
+                                  onPressed: () => _editPriority(t),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                ),
+              ],
             ),
-          ],
-        ),
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
-      ), // This trailing comma makes auto-formatting nicer for build methods.
+    );
+  }
+}
+
+class _PriorityChip extends StatelessWidget {
+  const _PriorityChip({required this.priority});
+  final Priority priority;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = switch (priority) {
+      Priority.high => Colors.red,
+      Priority.medium => Colors.orange,
+      Priority.low => Colors.green,
+    };
+    return Chip(
+      label: Text(priority.label),
+      avatar: Icon(Icons.flag, size: 16, color: color),
+      side: BorderSide(color: color),
     );
   }
 }
